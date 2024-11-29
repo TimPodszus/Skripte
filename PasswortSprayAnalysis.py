@@ -1,6 +1,14 @@
 import csv
 from collections import defaultdict
+import tkinter as tk
+from tkinter import filedialog
 
+root = tk.Tk()
+root.withdraw()
+file_path = filedialog.askopenfilename()
+
+
+save_path = filedialog.asksaveasfilename(title="Save results as...", filetypes=[("Text files", "*.txt")], defaultextension=".txt", initialfile="results.txt")
 def analyze_csv(file_path):
     ip_count = {}
     usernames = set()
@@ -25,7 +33,7 @@ def analyze_csv(file_path):
 
     return ip_count, usernames, user_ips
 
-def export_results(ip_count, usernames, user_ips, output_file):
+def export_results(ip_count, user_ips, output_file):
     with open(output_file, mode='w') as file:
         file.write("Client IP Counts:\n")
         for ip, count in ip_count.items():
@@ -36,10 +44,10 @@ def export_results(ip_count, usernames, user_ips, output_file):
             file.write(f"{user}: {', '.join(ips)}\n")
 
 # Example usage
-csv_file_path = 'C:/users/Podszus/Downloads/query_data(7).csv'  # Replace with the path to your CSV file
-output_txt_file = 'C:/Users/podszus/Desktop/output.txt'
+ # Replace with the path to your CSV file
+output_txt_file = save_path
 
-ip_count, usernames, user_ips = analyze_csv(csv_file_path)
-export_results(ip_count, usernames, user_ips, output_txt_file)
+ip_count, usernames, user_ips = analyze_csv(file_path)
+export_results(ip_count,  user_ips, output_txt_file)
 
 print(f"Results have been exported to {output_txt_file}.")
