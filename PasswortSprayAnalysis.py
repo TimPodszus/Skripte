@@ -13,23 +13,42 @@ def analyze_csv(file_path):
     ip_count = {}
     usernames = set()
     user_ips = defaultdict(set)
+    # Try common encodings to avoid UnicodeDecodeError on different CSV sources
+    encodings = ["utf-8-sig", "utf-8", "cp1252", "latin-1"]
+    for enc in encodings:
+        try:
+            with open(file_path, mode='r', encoding=enc, newline='') as file:
+                csv_reader = csv.DictReader(file)
+                for row in csv_reader:
+                    # Count client IPs
+                    ip = row.get("clientIp")
+                    if ip:
+                        ip_count[ip] = ip_count.get(ip, 0) + 1
 
-    with open(file_path, mode='r') as file:
+                    # Collect distinct usernames and their IPs
+                    user = row.get("user")
+                    if user:
+                        usernames.add(user)
+                        if ip:
+                            user_ips[user].add(ip)
+            return ip_count, usernames, user_ips
+        except UnicodeDecodeError:
+            # try next encoding
+            continue
+
+    # Last resort: open with replacement to ensure we can still parse the file
+    with open(file_path, mode='r', encoding='utf-8', errors='replace', newline='') as file:
         csv_reader = csv.DictReader(file)
         for row in csv_reader:
-            # Count client IPs
             ip = row.get("clientIp")
             if ip:
-                if ip in ip_count:
-                    ip_count[ip] += 1
-                else:
-                    ip_count[ip] = 1
+                ip_count[ip] = ip_count.get(ip, 0) + 1
 
-            # Collect distinct usernames and their IPs
             user = row.get("user")
             if user:
                 usernames.add(user)
-                user_ips[user].add(ip)
+                if ip:
+                    user_ips[user].add(ip)
 
     return ip_count, usernames, user_ips
 
