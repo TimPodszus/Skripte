@@ -1,18 +1,14 @@
 <#
 .SYNOPSIS
-  Löscht Remote Desktop-Verknüpfungen im Downloads-Ordner.
-  - Löscht *.rdp Dateien
-  - Löscht *.lnk, die auf mstsc.exe oder eine .rdp-Datei zeigen
+  Bereinigt den Downloads-Ordner von RDP-Dateien und sortiert den Rest in Unterordner.
 
 .DESCRIPTION
-  Nutzt standardmäßig -WhatIf über CmdletBinding. 
-  Um die Dateien wirklich zu löschen, muss das Skript mit -Confirm:$false oder (falls implementiert) ohne WhatIf-Präferenz aufgerufen werden.
+  1. Löscht *.rdp und entsprechende *.lnk Dateien.
+  2. Sortiert verbleibende Dateien nach Typ in Unterordner (Dokumente, Bilder, etc.).
+  Unterstützt -WhatIf.
 
 .PARAMETER Path
-  Ordnerpfad, der durchsucht werden soll (Standard: aktueller Benutzer Downloads).
-
-.PARAMETER Recurse
-  Wenn gesetzt, werden Unterordner ebenfalls durchsucht.
+  Ordnerpfad (Standard: Downloads des Nutzers).
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -26,61 +22,79 @@ if (-not (Test-Path -LiteralPath $Path)) {
   return
 }
 
-Write-Host "Durchsuche: $Path" -ForegroundColor Cyan
+# --- TEIL 1: RDP-REINIGUNG ---
+Write-Host "--- Phase 1: RDP-Bereinigung ---" -ForegroundColor Cyan
 
-# 1) Parameter für Get-ChildItem vorbereiten
-$gciParams = @{
-  LiteralPath = $Path
-  File        = $true
-  ErrorAction = "SilentlyContinue"
-}
+$gciParams = @{ LiteralPath = $Path; File = $true; ErrorAction = "SilentlyContinue" }
 if ($Recurse) { $gciParams.Recurse = $true }
 
-# Dateien sammeln
 $rdpFiles = Get-ChildItem @gciParams -Filter "*.rdp"
 $lnkFiles = Get-ChildItem @gciParams -Filter "*.lnk"
 
-# 2) .lnk Dateien prüfen
 $wsh = New-Object -ComObject WScript.Shell
-$rdpShortcuts = foreach ($lnk in $lnkFiles) {
-  try {
-    $sc = $wsh.CreateShortcut($lnk.FullName)
-    $target = if ($sc.TargetPath) { $sc.TargetPath.ToString().Trim() } else { $null }
-    $args   = if ($sc.Arguments) { $sc.Arguments.ToString().Trim() } else { $null }
-
-    $isRdpRelated = ($target -match '(?i)\\mstsc\.exe$') -or 
-                    ($target -match '(?i)\.rdp$') -or 
-                    ($args -match '(?i)\.rdp\b')
-
-    if ($isRdpRelated) {
-      [PSCustomObject]@{
-        Path = $lnk.FullName
-        Type = "LNK (RDP Target)"
-        Info = $target
-      }
-    }
-  } catch {
-    # Ignoriere Zugriffsprobleme oder defekte LNKs
-  }
-}
-
-# COM-Objekt aufräumen
-[System.Runtime.Interopservices.Marshal]::ReleaseComObject($wsh) | Out-Null
-
-# Liste zusammenführen
 $toDelete = @()
-$toDelete += $rdpFiles | Select-Object @{n="Path";e={$_.FullName}}, @{n="Type";e={"RDP File"}}, @{n="Info";e={$_.Name}}
-$toDelete += $rdpShortcuts
 
-if ($toDelete.Count -eq 0) {
-  Write-Host "Keine Remote Desktop-Dateien gefunden." -ForegroundColor Green
-  return
+# LNK-Dateien prüfen
+foreach ($lnk in $lnkFiles) {
+    try {
+        $sc = $wsh.CreateShortcut($lnk.FullName)
+        $target = $sc.TargetPath
+        $args   = $sc.Arguments
+        if (($target -match '(?i)\\mstsc\.exe$') -or ($target -match '(?i)\.rdp$') -or ($args -match '(?i)\.rdp\b')) {
+            $toDelete += [PSCustomObject]@{ Path = $lnk.FullName; Type = "LNK (RDP)" }
+        }
+    } catch {}
 }
+[System.Runtime.Interopservices.Marshal]::ReleaseComObject($wsh) | Out-Null
+$toDelete += $rdpFiles | Select-Object @{n="Path";e={$_.FullName}}, @{n="Type";e={"RDP File"}}
 
-# 3) Löschvorgang mit WhatIf-Support
+# Löschen
 foreach ($item in $toDelete) {
-  if ($PSCmdlet.ShouldProcess($item.Path, "Lösche $($item.Type)")) {
-    Remove-Item -LiteralPath $item.Path -Force
-    Write-Host "Gelöscht: $($item.Path)" -ForegroundColor Yellow
-  }
+    if ($PSCmdlet.ShouldProcess($item.Path, "Lösche RDP-bezogene Datei")) {
+        Remove-Item -LiteralPath $item.Path -Force
+    }
 }
+
+# --- TEIL 2: SORTIERUNG ---
+Write-Host "`n--- Phase 2: Sortierung ---" -ForegroundColor Cyan
+
+# Definition der Zielordner
+$ExtensionMap = @{
+    "Dokumente" = ".pdf", ".docx", ".doc", ".xlsx", ".pptx", ".txt", ".csv"
+    "Bilder"    = ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp"
+    "Programme" = ".exe", ".msi", ".appx"
+    "Archive"   = ".zip", ".7z", ".rar", ".tar", ".gz"
+    "Videos"    = ".mp4", ".mkv", ".mov", ".avi"
+}
+
+# Verbleibende Dateien im Hauptordner holen (ohne Unterordner zu verschieben)
+$remainingFiles = Get-ChildItem -LiteralPath $Path -File
+
+foreach ($file in $remainingFiles) {
+    $ext = $file.Extension.ToLower()
+    $targetFolder = "Sonstiges" # Standard, falls keine Endung matcht
+
+    foreach ($folder in $ExtensionMap.Keys) {
+        if ($ExtensionMap[$folder] -contains $ext) {
+            $targetFolder = $folder
+            break
+        }
+    }
+
+    $destDir = Join-Path $Path $targetFolder
+    
+    # Ordner erstellen, falls nötig
+    if (-not (Test-Path $destDir)) {
+        if ($PSCmdlet.ShouldProcess($destDir, "Erstelle neuen Ordner")) {
+            New-Item -Path $destDir -ItemType Directory | Out-Null
+        }
+    }
+
+    # Datei verschieben
+    $destPath = Join-Path $destDir $file.Name
+    if ($PSCmdlet.ShouldProcess($file.FullName, "Verschiebe nach $targetFolder")) {
+        Move-Item -LiteralPath $file.FullName -Destination $destPath -Force
+    }
+}
+
+Write-Host "`nFertig!" -ForegroundColor Green
